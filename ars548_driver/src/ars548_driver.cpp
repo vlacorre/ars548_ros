@@ -26,6 +26,10 @@ ars548_driver::ars548_driver() : Node("ars_548_driver"),
     this->declare_parameter("frameID", DEFAULT_FRAME_ID);
     this->declare_parameter("multicastIP", DEFAULT_ARS548_MULTICAST_IP);
     this->declare_parameter("overrideStamp", true);
+    // "host" | "sensor" | "sensor_utc"; empty keeps the overrideStamp behaviour (true -> host, false -> sensor)
+    this->declare_parameter("stampSource", "");
+    // TAI - UTC offset in seconds (37 since 2017-01-01); only used by stampSource "sensor_utc"
+    this->declare_parameter("utcOffset", 37);
 
     this->ars548_local_ip = this->get_parameter("localIP").as_string();
     this->radar_ip = this->get_parameter("radarIP").as_string();
@@ -33,6 +37,16 @@ ars548_driver::ars548_driver() : Node("ars_548_driver"),
     this->ars548_port = this->get_parameter("radarPort").as_int();
     this->frame_ID = this->get_parameter("frameID").as_string();
     this->override_stamp = this->get_parameter("overrideStamp").as_bool();
+    this->stamp_source = this->get_parameter("stampSource").as_string();
+    this->utc_offset = this->get_parameter("utcOffset").as_int();
+    this->last_sync_ok = false;
+    if (stamp_source.empty()) {
+        stamp_source = override_stamp ? "host" : "sensor";
+    } else if (stamp_source != "host" && stamp_source != "sensor" && stamp_source != "sensor_utc") {
+        RCLCPP_WARN(this->get_logger(), "Unknown stampSource '%s', using 'host'", stamp_source.c_str());
+        stamp_source = "host";
+    }
+    RCLCPP_INFO(this->get_logger(), "header.stamp source: %s (utcOffset %d s)", stamp_source.c_str(), utc_offset);
 
     // Initialize Publishers
     statusPublisher = create_publisher<ars548_messages::msg::Status>("Status", 10);
@@ -86,6 +100,29 @@ ars548_driver::~ars548_driver()
         shutdown(socket_fd, SHUT_RDWR);
         close(socket_fd);
     }
+}
+
+rclcpp::Time ars548_driver::stampFor(uint32_t sensor_sec, uint32_t sensor_nsec, uint8_t sync_status)
+{
+    if (stamp_source == "sensor") {
+        return rclcpp::Time(sensor_sec, sensor_nsec, RCL_ROS_TIME);
+    }
+    if (stamp_source == "sensor_utc") {
+        // Timestamp_SyncStatus: 1 = SYNC_OK, 2 = NEVER_SYNC, 3 = SYNC_LOST
+        const bool sync_ok = (sync_status == 1);
+        if (sync_ok != last_sync_ok) {
+            if (sync_ok) {
+                RCLCPP_INFO(this->get_logger(), "Sensor time synchronised: stamping with sensor time minus %d s", utc_offset);
+            } else {
+                RCLCPP_WARN(this->get_logger(), "Sensor time not synchronised (status %u): stamping with host receive time", sync_status);
+            }
+            last_sync_ok = sync_ok;
+        }
+        if (sync_ok) {
+            return rclcpp::Time(static_cast<int64_t>(sensor_sec) - utc_offset, sensor_nsec, RCL_ROS_TIME);
+        }
+    }
+    return this->now();
 }
 
 void ars548_driver::receive_data_loop()
@@ -184,11 +221,11 @@ void ars548_driver::receive_data_loop()
                     object_list = *((struct ObjectList *)msgbuf);
                     object_list.changeEndianness();
                     if(object_list.isValid()) {
-                        auto now = this->now();
-                        objectsPublisher->publish(object_list.toMsg(frame_ID, now, override_stamp));
-                        object_list.fillObjectCloud(cloud_msgObj, modifierObject, frame_ID, now, override_stamp);
+                        auto stamp = stampFor(object_list.Timestamp_Seconds, object_list.Timestamp_Nanoseconds, object_list.Timestamp_SyncStatus);
+                        objectsPublisher->publish(object_list.toMsg(frame_ID, stamp, true));
+                        object_list.fillObjectCloud(cloud_msgObj, modifierObject, frame_ID, stamp, true);
                         objectsCloudPublisher->publish(cloud_msgObj);
-                        directionPublisher->publish(object_list.getDirectionMessage(frame_ID, now, override_stamp));
+                        directionPublisher->publish(object_list.getDirectionMessage(frame_ID, stamp, true));
                     }
                 }
                 break;
@@ -198,9 +235,9 @@ void ars548_driver::receive_data_loop()
                     detection_list = *((struct DetectionList *)msgbuf);
                     detection_list.changeEndianness();
                     if (detection_list.isValid()) {
-                        auto now = this->now();
-                        detectionsPublisher->publish(detection_list.toMsg(frame_ID, now, override_stamp));
-                        detection_list.fillDetectionCloud(cloud_msgDetect, modifierDetection, frame_ID, now, override_stamp);
+                        auto stamp = stampFor(detection_list.Timestamp_Seconds, detection_list.Timestamp_Nanoseconds, detection_list.Timestamp_SyncStatus);
+                        detectionsPublisher->publish(detection_list.toMsg(frame_ID, stamp, true));
+                        detection_list.fillDetectionCloud(cloud_msgDetect, modifierDetection, frame_ID, stamp, true);
                         detectionsCloudPublisher->publish(cloud_msgDetect);
                     }
                 }
