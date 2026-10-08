@@ -44,10 +44,11 @@ class ars548_driver : public rclcpp::Node{
     private:
     bool override_stamp;
     // Stamp source for header.stamp: "host" (receive time), "sensor" (sensor clock as is),
-    // "sensor_utc" (sensor clock minus utcOffset when the sensor reports SYNC_OK, else host time).
+    // "sensor_utc" (sensor clock minus utcOffset while the sensor reports SYNC_OK or SYNC_LOST
+    // (holdover); host receive time while it reports NEVER_SYNC).
     std::string stamp_source;
     int utc_offset;
-    bool last_sync_ok;
+    uint8_t last_sync_status;
     /** Chooses header.stamp according to stamp_source. */
     rclcpp::Time stampFor(uint32_t sensor_sec, uint32_t sensor_nsec, uint8_t sync_status);
     std::string radar_ip;

@@ -39,7 +39,7 @@ ars548_driver::ars548_driver() : Node("ars_548_driver"),
     this->override_stamp = this->get_parameter("overrideStamp").as_bool();
     this->stamp_source = this->get_parameter("stampSource").as_string();
     this->utc_offset = this->get_parameter("utcOffset").as_int();
-    this->last_sync_ok = false;
+    this->last_sync_status = 0;
     if (stamp_source.empty()) {
         stamp_source = override_stamp ? "host" : "sensor";
     } else if (stamp_source != "host" && stamp_source != "sensor" && stamp_source != "sensor_utc") {
@@ -108,17 +108,22 @@ rclcpp::Time ars548_driver::stampFor(uint32_t sensor_sec, uint32_t sensor_nsec, 
         return rclcpp::Time(sensor_sec, sensor_nsec, RCL_ROS_TIME);
     }
     if (stamp_source == "sensor_utc") {
-        // Timestamp_SyncStatus: 1 = SYNC_OK, 2 = NEVER_SYNC, 3 = SYNC_LOST
-        const bool sync_ok = (sync_status == 1);
-        if (sync_ok != last_sync_ok) {
-            if (sync_ok) {
+        // Timestamp_SyncStatus: 1 = SYNC_OK, 2 = NEVER_SYNC, 3 = SYNC_LOST.
+        // After SYNC_LOST the sensor clock keeps running from a time that was correct
+        // (holdover, drift of the order of 1 ms/min), which is still far better than the
+        // host receive time (~66 ms late), so only NEVER_SYNC falls back to host time.
+        const bool sensor_time_usable = (sync_status == 1 || sync_status == 3);
+        if (sync_status != last_sync_status) {
+            if (sync_status == 1) {
                 RCLCPP_INFO(this->get_logger(), "Sensor time synchronised: stamping with sensor time minus %d s", utc_offset);
+            } else if (sync_status == 3) {
+                RCLCPP_WARN(this->get_logger(), "Sensor time sync lost: keeping sensor time (holdover) minus %d s", utc_offset);
             } else {
-                RCLCPP_WARN(this->get_logger(), "Sensor time not synchronised (status %u): stamping with host receive time", sync_status);
+                RCLCPP_WARN(this->get_logger(), "Sensor time never synchronised (status %u): stamping with host receive time", sync_status);
             }
-            last_sync_ok = sync_ok;
+            last_sync_status = sync_status;
         }
-        if (sync_ok) {
+        if (sensor_time_usable) {
             return rclcpp::Time(static_cast<int64_t>(sensor_sec) - utc_offset, sensor_nsec, RCL_ROS_TIME);
         }
     }
