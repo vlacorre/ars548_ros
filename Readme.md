@@ -1,5 +1,29 @@
 ARS_548_RDI Driver
 ================
+
+> **Fork notice.** This is [vlacorre/ars548_ros](https://github.com/vlacorre/ars548_ros), a fork of
+> [robotics-upo/ars548_ros](https://github.com/robotics-upo/ars548_ros) used for the IAM4RAIL radar
+> odometry work (rail vehicle, ROS 2 Humble). Branches:
+>
+> | Branch | Content |
+> |---|---|
+> | `master` | mirror of upstream `master`, never edited here |
+> | `fix/detection-list-missing-fields` | upstream PR candidate: copy `list_radveldomain_min/max`, `aln_*`, `list_invalidflags` and ObjectList fields into the ROS messages, with a unit test |
+> | `feat/stamp-source` | upstream PR candidate (on top of the fix): `stampSource` / `utcOffset` parameters for PTP-synchronised sensor time |
+> | `dev` | what we run: all of the above plus this notice |
+>
+> Changes relative to upstream, in short:
+> - `DetectionList` and `ObjectList` messages now carry every list-level field the sensor sends
+>   (upstream left the unambiguous Doppler domain and the alignment corrections at zero).
+> - `stampSource:=sensor_utc` stamps messages with the sensor's PTP time minus `utcOffset` (37 s,
+>   TAI-UTC) while the sensor reports SYNC_OK, so `header.stamp` is the UTC measurement instant
+>   (about 66 ms before the list arrives on the host); otherwise it falls back to host receive
+>   time. Default behaviour is unchanged. gPTP setup notes for the ARS548 live in the IAM4RAIL
+>   workspace (`tools/ptp/README.md`).
+> - The sensor is run through a Technica 100BASE-T1 media converter on VLAN 19; see `configurer.sh`.
+>
+> To sync with upstream: `git fetch upstream && git checkout master && git merge --ff-only upstream/master`.
+
 Introduction
 ---
 This is a ROS 2 driver for the Continental ARS_548 Radar4d created by the Service Robotics Lab from the Pablo de Olavide University (Spain). For the ROS driver, please refer to the "noetic" branch of this repository.
